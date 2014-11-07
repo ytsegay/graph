@@ -13,6 +13,7 @@ class GraphAdjacencyHashTable {
 	private var messagesMap =  scala.collection.mutable.LinkedHashMap.empty[String, Array[Double]]
 	private val nodesMap = scala.collection.mutable.LinkedHashMap.empty[Int, Node]
 	private var countOfStates = 0
+	private var verbose = false
 
 
 	def addNode(from:Int, to:Int) = {
@@ -22,7 +23,8 @@ class GraphAdjacencyHashTable {
 	}
 
 
-	def initMessageMap(): Unit ={
+	def initMessageMap(verboseOutput:Boolean = false): Unit ={
+		verbose = verboseOutput
 		val propagationMatrix = generatePropagationMatrix
 
 		for ((k,v) <- graphMap) {
@@ -49,14 +51,23 @@ class GraphAdjacencyHashTable {
 		val newMessagesMap = scala.collection.mutable.LinkedHashMap.empty[String, Array[Double]]
 
 		for (iterations <- 0 until iterationsCount) {
-			//println("\niteration: " + iterations)
-			for ((i, v) <- graphMap) {
-				for (j <- v) {
-					val msg = generateMessage(i, j, propagationMatrix)
-					//println("msg: " + generateEdgeId(i, j) + " => " + msg.mkString(", "))
+			if (verbose) println("\niteration: " + iterations)
 
-					// propagate message to j
+			for ((i, v) <- graphMap) {
+				// compute the product of all adj edges. This needs to only be done once.
+				var prod = new Array[Double](countOfStates)
+				for(i <- prod.indices){prod(i) = 1.0}
+				for (n <- graphMap(i)) {
+					prod = multiplyArrays(prod, messagesMap(generateEdgeId(n, i)))
+				}
+
+				// now propagate i's message to every adj node.
+				for (j <- v) {
+					//val msg = generateMessage(i, j, propagationMatrix)
+					val msg = generateMessageFaster(i, j, propagationMatrix, prod)
 					newMessagesMap(generateEdgeId(i, j)) = msg
+
+					if (verbose) println("msg: " + generateEdgeId(i, j) + " => " + msg.mkString(", "))
 				}
 			}
 			messagesMap = newMessagesMap
@@ -65,6 +76,7 @@ class GraphAdjacencyHashTable {
 	}
 
 
+	// TODO: get rid of this.
 	def generateMessage(fromNode:Int, toNode:Int, propagationMatrix:Array[Array[Double]]) :Array[Double] = {
 		// prepare message from i -> j
 		var msg = new Array[Double](countOfStates)
@@ -87,7 +99,29 @@ class GraphAdjacencyHashTable {
 	}
 
 
+	def generateMessageFaster(fromNode:Int, toNode:Int, propagationMatrix:Array[Array[Double]], p:Array[Double]) :Array[Double] = {
+
+		// code begins here
+		val prod = divideArrays(p, messagesMap(generateEdgeId(toNode, fromNode)))
+
+		// prepare message from i -> j
+		var msg = new Array[Double](countOfStates)
+		for (sigma <- 0 until countOfStates) {
+			//TODO: can we inverse this so we can call propagationMatrix(sigma)?
+			val pInv = for(sigmaPrime <- 0 until countOfStates) yield propagationMatrix(sigmaPrime)(sigma)
+			val tmp = multiplyArrays(pInv.toArray, prod)
+
+			msg(sigma) = tmp.sum
+		}
+		// normalize to avoid getting to zero prob. quickly
+		msg = normalize(msg)
+		msg
+	}
+
+
 	def computeBeliefs() = {
+		val values = Array("FRAUD", "ACCOMPLICE", "HONEST")
+
 		for ((i, v) <- graphMap) {
 			var beliefs = nodesMap(i).beliefs
 
@@ -99,15 +133,19 @@ class GraphAdjacencyHashTable {
 				beliefs(sigma) = prod
 			}
 			beliefs = normalize(beliefs)
-			println(i + ": " + beliefs.mkString(", ") + " " + mapBeliefs(beliefs))
+			val maxBeliefIndex = mapBeliefs(beliefs)
+
+			// generate a user friendly output
+			val output = for(b <- beliefs.indices) yield(values(b).charAt(0) + ":" + "%2.4f".format(beliefs(b)*100) + "%")
+			println("%-4s".format(i) + ": " + "%-10s".format(values(maxBeliefIndex)) + " [" + output.mkString(", ") + "] ")
 		}
 	}
 
 
-	private def mapBeliefs(msg:Array[Double]) :String = {
+	private def mapBeliefs(msg:Array[Double]) :Int = {
 		var maxI = 2
 		var maxVal = msg(maxI)
-		val values = Array("FRAUD", "ACCOMPLICE", "HONEST")
+
 
 		for(i <- msg.indices){
 			if (msg(i) > maxVal){
@@ -115,7 +153,7 @@ class GraphAdjacencyHashTable {
 				maxVal = msg(i)
 			}
 		}
-		values(maxI)
+		maxI
 	}
 
 
@@ -146,6 +184,12 @@ class GraphAdjacencyHashTable {
 	// helper to do array division
 	private def divideArrays(arr:Array[Double], arr2:Array[Double]) :Array[Double] = {
 		val x = for(i <- arr.indices) yield arr(i)/arr2(i)
+		x.toArray
+	}
+
+	// helper to do array division
+	private def sumArrays(arr:Array[Double], arr2:Array[Double]) :Array[Double] = {
+		val x = for(i <- arr.indices) yield arr(i)+arr2(i)
 		x.toArray
 	}
 
